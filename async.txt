@@ -1,12 +1,14 @@
 --@name Async Lib
 --@author Periapsis
+--@shared
 
 local callable = {}
 function callable:__call( ... )
     return self:call( ... )
 end
 
-local max, qAvg, qUse, qMax, yield = math.max, quotaAverage, quotaUsed, quotaMax(), coroutine.yield
+local max, qAvg, qUse, qMax = math.max, cpuAverage, cpuUsed, cpuMax()
+yield = coroutine.yield
 
 local threadCount = 0
 local avgThreadMaxCpu = 0
@@ -24,36 +26,36 @@ end
 -- @param hookName: The hook to use to continue execution (Defaults to 'tick')
 function async( func, hookName )
     local thread = {}
-    
+
     thread.func = func
-    
+
     function thread:call( ... )
         local runtime = {}
-        
+
         local routine = coroutine.create( self.func )
         local args = {...}
-        
+
         runtime.thread = self
         runtime.exec = routine
-        runtime.name = "Thread_" .. tostring( routine )
-        
+        runtime.name = "Thread_" .. tostring( routine ):sub( 10 )
+
         local values
         hookName = hookName or "Tick"
-        
+
         hook.add( hookName, runtime.name, function()
             if coroutine.status( routine ) ~= "dead" then
                 values = {coroutine.resume( routine, unpack( args ) )}
                 return
             end
-            
+
             runtime.values = values
-            
+
             hook.remove( hookName, runtime.name )
         end )
-        
+
         return runtime
     end
-    
+
     return setmetatable( thread, callable )
 end
 
@@ -62,7 +64,7 @@ end
 -- @param function: The thread to wait for
 function await( thread )
     while not thread.values do yield() end
-    
+
     return unpack( thread.values )
 end
 
@@ -73,16 +75,12 @@ function delay( time )
     coroutine.wait( time * 0.001 )
 end
 
---- yield
--- Same as coroutine.yield but shorter to write
-function yield()
-    coroutine.yield()
-end
-
 ------------------------------------------------------------
 -- Utilities
 
-function http._getAsync( url, headers )
+local function httpGetAsync( url, headers )
+    while not http.canRequest() do yield() end
+    
     local waiting = true
     local response
 
@@ -93,10 +91,10 @@ function http._getAsync( url, headers )
             headers = headers,
             code = code
         }
-        
+
         waiting = false
     end
-    
+
     local function onFail( reason )
         response = {
             content = reason,
@@ -104,13 +102,13 @@ function http._getAsync( url, headers )
             headers = {},
             code = 400
         }
-        
+
         waiting = false
     end
-    
+
     http.get( url, onSuccess, onFail, headers )
     while waiting do yield() end
-    
+
     return response
 end
 
@@ -118,11 +116,11 @@ end
 -- Http GET request that runs asynchroneously
 -- @param url: The url to send the request to
 -- @param optional headers: Optional list of headers to send
-function http.getAsync( url, headers )
-    return async( http._getAsync )( url, headers )
-end
+http.getAsync = async( httpGetAsync )
 
-function http._postAsync( url, payload, headers )
+local function httpPostAsync( url, payload, headers )
+    while not http.canRequest() do yield() end
+    
     local waiting = true
     local response
 
@@ -133,10 +131,10 @@ function http._postAsync( url, payload, headers )
             headers = headers,
             code = code
         }
-        
+
         waiting = false
     end
-    
+
     local function onFail( reason )
         response = {
             content = reason,
@@ -144,13 +142,13 @@ function http._postAsync( url, payload, headers )
             headers = {},
             code = 400
         }
-        
+
         waiting = false
     end
-    
+
     http.post( url, payload, onSuccess, onFail, headers )
     while waiting do yield() end
-    
+
     return response
 end
 
@@ -159,29 +157,35 @@ end
 -- @param url: The url to send the request to
 -- @param payload: The payload to send
 -- @param optional headers: Optional list of headers to send
-function http.postAsync( url, payload, headers )
-    return async( http._postAsync )( url, payload, headers )
-end
+http.postAsync = async( httpPostAsync )
 
-function hook._async( hookName )
+local function hookAsync( hookName )
     local waiting = true
     local values
-    
+
     local function callback( ... )
         waiting = false
         values = {...}
     end
-    
+
     hook.add( hookName, "AsyncHook_" .. tostring( callback ), callback )
-    
     while waiting do yield() end
-    
+
     return unpack( values )
 end
 
 --- hook.async( hookName )
 -- Returns the values passed to the hook
 -- @param hookName: The hook to get values from
-function hook.async( hookName )
-    return async( hook._async )( hookName )
+hook.async = async( hookAsync )
+
+if SERVER then
+    local function propCreateAsync( position, angles, model, frozen )
+        while not prop.canSpawn() do yield() end
+        return prop.create( position, angles, model, frozen )
+    end
+    
+    prop.createAsync = async( propCreateAsync )
 end
+
+return async, await, quota, delay
